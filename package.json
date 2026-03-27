@@ -1,0 +1,17 @@
+{
+  "name": "nebupet",
+  "version": "0.1.0",
+  "description": "NebuPet — macOS AI Desktop Pet with OpenClaw",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}

@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; }
+  html, body { width: 100vw; height: 100vh; overflow: hidden; background: transparent; user-select: none; }
+  #pet-container { position: absolute; cursor: grab; }
+  #pet-img {
+    width: 200px;
+    height: auto;
+    image-rendering: pixelated;
+    pointer-events: auto;
+  }
+  #bubble {
+    position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+    background: rgba(255,255,255,0.96); color: #222;
+    font-family: -apple-system, "Helvetica Neue", "PingFang SC", sans-serif;
+    font-size: 14px; line-height: 1.6; padding: 10px 14px;
+    border-radius: 16px 16px 16px 4px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.10);
+    width: 220px; word-wrap: break-word;
+    opacity: 0; transition: opacity 0.4s ease; pointer-events: none; white-space: pre-wrap;
+  }
+  #bubble.visible { opacity: 1; }
+  #status-dot {
+    position: absolute; top: 0; right: 0; width: 10px; height: 10px;
+    border-radius: 50%; background: #4ade80; border: 2px solid white;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2); z-index: 10;
+  }
+  #effect-layer {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 20;
+  }
+</style>
+</head>
+<body>
+<div id="pet-container">
+  <div id="bubble"></div>
+  <div id="status-dot"></div>
+  <img id="pet-img" src="./assets/bunny/frame_000.png">
+  <canvas id="effect-layer" width="200" height="240"></canvas>
+</div>
+
+<script>
+const container = document.getElementById('pet-container');
+const petImg = document.getElementById('pet-img');
+const bubble = document.getElementById('bubble');
+const statusDot = document.getElementById('status-dot');
+const effectCanvas = document.getElementById('effect-layer');
+const eCtx = effectCanvas.getContext('2d');
+
+// =============== PIXEL ART EFFECTS ON CHARACTER ===============
+let statusAnimFrame = 0;
+let currentStatusAnim = null;
+let statusAnimInterval = null;
+let particles = [];
+
+function px(ctx, x, y, size, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x * size, y * size, size, size);
+}
+
+function drawThinkingBubble(ctx, frame) {
+  // 思考气泡在头顶
+  const s = 3;
+  const ox = 90, oy = 5; // 头顶偏右
+  const bounce = Math.sin(frame * 0.5);
+
+  // 小圆点 (连接线)
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(ox - 10, oy + 25 + bounce, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(ox - 5, oy + 18 + bounce, 4, 0, Math.PI * 2); ctx.fill();
+
+  // 主气泡
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.roundRect(ox - 20, oy + bounce, 50, 18, 9);
+  ctx.fill(); ctx.stroke();
+
+  // 动态点 ...
+  const dots = frame % 4;
+  ctx.fillStyle = '#555';
+  if (dots >= 1) { ctx.beginPath(); ctx.arc(ox - 5, oy + 9 + bounce, 3, 0, Math.PI * 2); ctx.fill(); }
+  if (dots >= 2) { ctx.beginPath(); ctx.arc(ox + 5, oy + 9 + bounce, 3, 0, Math.PI * 2); ctx.fill(); }
+  if (dots >= 3) { ctx.beginPath(); ctx.arc(ox + 15, oy + 9 + bounce, 3, 0, Math.PI * 2); ctx.fill(); }
+}
+
+function drawComputer(ctx, frame) {
+  // 小电脑在角色右下方
+  const ox = 120, oy = 100;
+  const s = 2;
+
+  // 显示器
+  ctx.fillStyle = '#444';
+  ctx.fillRect(ox, oy, 36, 28);
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(ox + 3, oy + 3, 30, 18);
+
+  // 代码行
+  const lines = frame % 3;
+  for (let i = 0; i <= lines; i++) {
+    const len = i === lines ? 6 + (frame % 8) : 20;
+    ctx.fillStyle = '#4f8';
+    ctx.fillRect(ox + 5, oy + 6 + i * 5, Math.min(len, 26), 3);
+  }
+  // 光标闪烁
+  if (frame % 2 === 0) {
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(ox + 5 + Math.min(6 + (frame % 8), 26), oy + 6 + lines * 5, 2, 3);
+  }
+
+  // 支架
+  ctx.fillStyle = '#555';
+  ctx.fillRect(ox + 14, oy + 28, 8, 4);
+  ctx.fillRect(ox + 10, oy + 32, 16, 3);
+
+  // 键盘
+  ctx.fillStyle = '#666';
+  ctx.fillRect(ox - 2, oy + 38, 40, 8);
+  // 按键闪烁
+  const pressKey = (frame * 3) % 8;
+  for (let i = 0; i < 8; i++) {
+    ctx.fillStyle = i === pressKey ? '#aaa' : '#888';
+    ctx.fillRect(ox + 1 + i * 5, oy + 40, 4, 4);
+  }
+}
+
+function startStatusAnim(type) {
+  if (statusAnimInterval) clearInterval(statusAnimInterval);
+  currentStatusAnim = type;
+  statusAnimFrame = 0;
+  particles = [];
+
+  statusAnimInterval = setInterval(() => {
+    statusAnimFrame++;
+    eCtx.clearRect(0, 0, 200, 240);
+    if (type === 'thinking') drawThinkingBubble(eCtx, statusAnimFrame);
+    else if (type === 'typing') drawComputer(eCtx, statusAnimFrame);
+  }, 250);
+}
+
+function drawHeart(ctx, frame) {
+  // 多个爱心从角色身体向上飘
+  particles.forEach(p => {
+    p.y -= 0.8;
+    p.x += Math.sin(p.y * 0.05) * 0.5;
+    p.alpha -= 0.01;
+    ctx.globalAlpha = Math.max(0, p.alpha);
+    ctx.fillStyle = p.color;
+    ctx.font = `${p.size}px serif`;
+    ctx.fillText('❤', p.x, p.y);
+  });
+  ctx.globalAlpha = 1;
+  particles = particles.filter(p => p.alpha > 0);
+
+  if (frame % 3 === 0) {
+    particles.push({
+      x: 40 + Math.random() * 80, y: 120,
+      size: 12 + Math.random() * 10,
+      alpha: 1,
+      color: ['#FF6B8A', '#FF4466', '#FF8FAA'][Math.floor(Math.random() * 3)]
+    });
+  }
+}
+
+function drawAngry(ctx, frame) {
+  // 怒气符号在头顶，抖动
+  const shake = (frame % 2 === 0) ? 2 : -2;
+  const ox = 105 + shake, oy = 15;
+  ctx.strokeStyle = '#FF4444';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  // 十字怒气 #
+  ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + 12, oy + 4); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ox + 2, oy + 8); ctx.lineTo(ox + 14, oy + 12); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ox + 4, oy - 2); ctx.lineTo(ox + 2, oy + 14); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ox + 12, oy); ctx.lineTo(ox + 10, oy + 16); ctx.stroke();
+  // 第二个小的
+  const ox2 = 30 + shake, oy2 = 25;
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(ox2, oy2); ctx.lineTo(ox2 + 8, oy2 + 3); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ox2 + 1, oy2 + 5); ctx.lineTo(ox2 + 9, oy2 + 8); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ox2 + 3, oy2 - 1); ctx.lineTo(ox2 + 1, oy2 + 10); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ox2 + 8, oy2); ctx.lineTo(ox2 + 6, oy2 + 11); ctx.stroke();
+}
+
+function drawStar(ctx, frame) {
+  // 星星闪烁围绕角色
+  const sparkles = [
+    { x: 20, y: 30 }, { x: 135, y: 25 }, { x: 10, y: 90 },
+    { x: 145, y: 80 }, { x: 70, y: 10 }, { x: 50, y: 120 },
+  ];
+  sparkles.forEach((sp, i) => {
+    const phase = (frame + i * 2) % 6;
+    if (phase > 3) return;
+    const size = 3 + phase;
+    const alpha = 1 - phase * 0.2;
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#FFD700';
+    ctx.lineWidth = 2;
+    // 十字星
+    ctx.beginPath(); ctx.moveTo(sp.x, sp.y - size); ctx.lineTo(sp.x, sp.y + size); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sp.x - size, sp.y); ctx.lineTo(sp.x + size, sp.y); ctx.stroke();
+    // 斜线
+    const ds = size * 0.6;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(sp.x - ds, sp.y - ds); ctx.lineTo(sp.x + ds, sp.y + ds); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sp.x + ds, sp.y - ds); ctx.lineTo(sp.x - ds, sp.y + ds); ctx.stroke();
+  });
+  ctx.globalAlpha = 1;
+}
+
+function drawSleep(ctx, frame) {
+  // Zzz 从头旁边往上飘
+  const f = frame % 12;
+  ctx.font = 'bold 14px monospace';
+  ctx.fillStyle = '#88AACC';
+
+  if (f >= 0) { ctx.globalAlpha = Math.max(0, 1 - f * 0.05); ctx.fillText('z', 120, 60 - f * 1.5); }
+  if (f >= 3) { ctx.globalAlpha = Math.max(0, 1 - (f-3) * 0.05); ctx.font = 'bold 18px monospace'; ctx.fillText('Z', 130, 45 - (f-3) * 1.5); }
+  if (f >= 6) { ctx.globalAlpha = Math.max(0, 1 - (f-6) * 0.05); ctx.font = 'bold 24px monospace'; ctx.fillText('Z', 138, 25 - (f-6) * 1.5); }
+  ctx.globalAlpha = 1;
+}
+
+function showEmotion(type, duration = 3000) {
+  if (currentStatusAnim) return;
+  if (statusAnimInterval) clearInterval(statusAnimInterval);
+  statusAnimFrame = 0;
+  particles = [];
+  const drawFn = { heart: drawHeart, angry: drawAngry, star: drawStar, sleep: drawSleep }[type];
+  if (!drawFn) return;
+  statusAnimInterval = setInterval(() => {
+    statusAnimFrame++;
+    eCtx.clearRect(0, 0, 200, 240);
+    drawFn(eCtx, statusAnimFrame);
+  }, 150);
+  setTimeout(() => { if (currentStatusAnim === null) stopStatusAnim(); }, duration);
+}
+
+function stopStatusAnim() {
+  if (statusAnimInterval) clearInterval(statusAnimInterval);
+  statusAnimInterval = null;
+  currentStatusAnim = null;
+  particles = [];
+  eCtx.clearRect(0, 0, 200, 240);
+}
+
+// =============== FRAME ANIMATION ===============
+const FRAME_COUNT = 4;
+const frames = [];
+for (let i = 0; i < FRAME_COUNT; i++) {
+  const img = new Image();
+  img.src = `./assets/bunny/frame_${String(i).padStart(3, '0')}.png`;
+  frames.push(img);
+}
+
+let animFrame = 0;
+let frameTimer = 0;
+const ANIM_FPS = 3;
+
+// =============== PET STATE ===============
+let petX = window.innerWidth / 2 - 80;
+let petY = window.innerHeight - 200;
+let baseY = petY;
+let isWalking = false;
+let walkTargetX = petX;
+let walkSpeed = 0.6;
+let facingLeft = false;
+let bounceTime = 0;
+let isDragging = false;
+let dragOffsetX = 0, dragOffsetY = 0;
+let agentStatus = 'idle';
+let state = 'idle';
+
+// =============== MAIN LOOP ===============
+function update() {
+  frameTimer++;
+  if (frameTimer >= Math.round(60 / ANIM_FPS)) {
+    frameTimer = 0;
+    animFrame = (animFrame + 1) % FRAME_COUNT;
+    petImg.src = frames[animFrame].src;
+  }
+
+  // Walking
+  if (isWalking && !isDragging) {
+    const diff = walkTargetX - petX;
+    if (Math.abs(diff) < 3) {
+      isWalking = false;
+      state = 'idle';
+      petImg.style.transform = '';
+      scheduleWalk();
+    } else {
+      state = 'walk';
+      const dir = Math.sign(diff);
+      petX += dir * walkSpeed;
+      facingLeft = dir < 0;
+      bounceTime += 0.08;
+
+      // Walking effect: gentle bounce only
+      const bounce = Math.sin(bounceTime) * 1.5;
+      const scaleX = facingLeft ? -1 : 1;
+      petImg.style.transform = `scaleX(${scaleX}) translateY(${bounce}px)`;
+    }
+  } else if (!isDragging) {
+    // Idle breathing effect
+    const breath = Math.sin(Date.now() / 1500) * 1.5;
+    const scaleX = facingLeft ? -1 : 1;
+    petImg.style.transform = `scaleX(${scaleX}) translateY(${breath}px)`;
+  }
+
+  container.style.left = petX + 'px';
+  container.style.top = petY + 'px';
+
+  requestAnimationFrame(update);
+}
+
+// =============== WALK ===============
+function scheduleWalk() {
+  setTimeout(() => {
+    if (isDragging || agentStatus !== 'idle') { scheduleWalk(); return; }
+    isWalking = true;
+    bounceTime = 0;
+    walkTargetX = 80 + Math.random() * (window.innerWidth - 240);
+  }, 5000 + Math.random() * 12000);
+}
+
+// =============== BUBBLE ===============
+let bubbleTimeout, typewriterInterval;
+function showBubble(text) {
+  if (typewriterInterval) clearInterval(typewriterInterval);
+  if (bubbleTimeout) clearTimeout(bubbleTimeout);
+  let idx = 0;
+  bubble.textContent = '';
+  bubble.classList.add('visible');
+  typewriterInterval = setInterval(() => {
+    if (idx < text.length) { idx += Math.min(2, text.length - idx); bubble.textContent = text.slice(0, idx); }
+    else {
+      clearInterval(typewriterInterval); typewriterInterval = null;
+      bubbleTimeout = setTimeout(() => bubble.classList.remove('visible'), 10000);
+    }
+  }, 50);
+}
+
+function setStatus(s) {
+  agentStatus = s;
+  statusDot.style.background = s === 'working' ? '#f59e0b' : s === 'tool' ? '#8b5cf6' : '#4ade80';
+  if (s === 'working') {
+    startStatusAnim('thinking');
+    showBubble('🤔 思考中...');
+  } else if (s === 'tool') {
+    startStatusAnim('typing');
+    showBubble('🔧 使用工具中...');
+  } else if (s === 'idle') {
+    stopStatusAnim();
+  }
+}
+
+// =============== INTERACTION ===============
+let mouseDownPos = null;
+let mouseDownTime = 0;
+
+container.addEventListener('mouseenter', () => { window.nebuPet.setIgnoreMouse(false); container.style.cursor = 'pointer'; });
+container.addEventListener('mouseleave', () => { if (!isDragging) window.nebuPet.setIgnoreMouse(true); });
+
+container.addEventListener('mousedown', (e) => {
+  mouseDownPos = { x: e.clientX, y: e.clientY };
+  mouseDownTime = Date.now();
+  dragOffsetX = e.clientX - petX;
+  dragOffsetY = e.clientY - petY;
+  window.nebuPet.setIgnoreMouse(false);
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!mouseDownPos) return;
+  const dx = e.clientX - mouseDownPos.x;
+  const dy = e.clientY - mouseDownPos.y;
+  if (!isDragging && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
+    isDragging = true;
+    container.style.cursor = 'grabbing';
+  }
+  if (isDragging) {
+    petX = e.clientX - dragOffsetX;
+    petY = e.clientY - dragOffsetY;
+    baseY = petY;
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  if (isDragging) {
+    isDragging = false;
+    container.style.cursor = 'pointer';
+  }
+  mouseDownPos = null;
+  window.nebuPet.setIgnoreMouse(true);
+});
+
+// 单击互动 - 带情绪
+let clickCount = 0;
+container.addEventListener('click', (e) => {
+  if (isDragging) return;
+  clickCount++;
+
+  const reactions = [
+    { msg: '嘿嘿~ 你点我干嘛！😆', emotion: 'star' },
+    { msg: '好开心~ 你来陪我啦！💕', emotion: 'heart' },
+    { msg: '哼！不要随便戳我啦~', emotion: 'angry' },
+    { msg: '好啦好啦~ 有什么事吗？🐰', emotion: 'star' },
+    { msg: '你好呀~ 今天过得怎么样？✨', emotion: 'heart' },
+    { msg: '摸摸头~ 嘿嘿', emotion: 'heart' },
+    { msg: '再点我就生气了哦~', emotion: 'angry' },
+    { msg: '困了... 想睡觉...', emotion: 'sleep' },
+  ];
+
+  // 连续点击会生气
+  if (clickCount > 5) {
+    showBubble('别点了别点了！！😡');
+    showEmotion('angry', 2000);
+    clickCount = 0;
+    return;
+  }
+
+  const r = reactions[Math.floor(Math.random() * reactions.length)];
+  showBubble(r.msg);
+  showEmotion(r.emotion, 3000);
+
+  // Reset click count after 3s
+  setTimeout(() => { clickCount = Math.max(0, clickCount - 1); }, 3000);
+});
+
+// =============== IPC ===============
+window.nebuPet.onPetEvent((data) => {
+  if (data.type === 'message') {
+    showBubble(data.content);
+    showEmotion('star', 3000);
+  }
+  else if (data.type === 'status') setStatus(data.status);
+  else if (data.type === 'app-change') {
+    showBubble(`你在用 ${data.app} 呢~ 💻`);
+    showEmotion('star', 2000);
+  }
+});
+window.nebuPet.onAskScreen?.(() => {
+  showBubble('让我看看你在做什么... 🔍');
+  window.nebuPet.getActiveWindow?.().then(app => {
+    if (!app) return;
+    showBubble(`你在用 ${app}，让我想想... 🤔`);
+    window.nebuPet.askOpenClaw?.(`用户正在使用 ${app}，请用中文给出一条简短有趣的提示或帮助建议，不超过30字，要可爱俏皮`).then(reply => {
+      if (reply) showBubble(reply);
+    });
+  });
+});
+
+window.nebuPet.onAnalyzeScreenshot?.(() => {
+  showBubble('正在截图分析... 📸');
+  window.nebuPet.takeScreenshot?.().then(dataUrl => {
+    if (!dataUrl) { showBubble('截图失败了... 😢'); return; }
+    window.nebuPet.askOpenClaw?.('用户刚刚截了一张屏幕截图，请用中文简短回复"已收到截图"并给一个可爱的鼓励，不超过20字').then(reply => {
+      if (reply) showBubble(reply);
+      else showBubble('截图已收到！加油哦~ 💪');
+    });
+  });
+});
+
+// =============== START ===============
+update();
+setTimeout(() => showBubble('你好！我是 NebuPet~ ✨'), 1500);
+</script>
+</body>
+</html>
